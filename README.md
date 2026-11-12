@@ -15,7 +15,7 @@ A WordPress plugin that automatically shows the latest posts from a Facebook Pag
 
 ## Installation
 
-1. Download `gd-fb-feed.zip` from [Releases](../../releases).
+1. Download [`gd-fb-feed.zip`](https://github.com/devmant/display-fb-posts-in-wp/raw/main/gd-fb-feed.zip) from this repository.
 2. In WordPress: **Plugins → Add New → Upload Plugin** → choose the zip → **Install** → **Activate**.
 3. Go to **Settings → Facebook Feed** and follow **Connect your Facebook Page** (one-time, about 5 minutes).
 4. Add the shortcode `[fb_posts]` to any page (in the block editor, use a **Shortcode** block).
