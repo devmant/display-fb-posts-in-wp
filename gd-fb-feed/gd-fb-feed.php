@@ -2,7 +2,7 @@
 /**
  * Plugin Name:       FB Posts Feed
  * Description:       Automatically shows the latest posts from your Facebook Page on any WordPress page. Use the shortcode [fb_posts].
- * Version:           1.0.0
+ * Version:           1.2.1
  * Requires at least: 5.8
  * Requires PHP:      7.4
  * Author:            Galiu Daugiau
@@ -15,7 +15,7 @@ if ( ! defined( 'ABSPATH' ) ) {
 	exit;
 }
 
-define( 'GDFF_VERSION', '1.0.0' );
+define( 'GDFF_VERSION', '1.2.1' );
 define( 'GDFF_FILE', __FILE__ );
 define( 'GDFF_DIR', plugin_dir_path( __FILE__ ) );
 define( 'GDFF_URL', plugin_dir_url( __FILE__ ) );
@@ -31,6 +31,11 @@ require_once GDFF_DIR . 'includes/class-gdff-admin.php';
 add_action(
 	'plugins_loaded',
 	function () {
+		// After an update, reload posts so fixes apply straight away.
+		if ( get_option( 'gdff_version' ) !== GDFF_VERSION ) {
+			delete_option( GDFF_CACHE_OPTION );
+			update_option( 'gdff_version', GDFF_VERSION );
+		}
 		GDFF_Feed::init();
 		if ( is_admin() ) {
 			GDFF_Admin::init();

@@ -9,6 +9,8 @@ A WordPress plugin that automatically shows the latest posts from a Facebook Pag
 - Video posts get a play icon, albums show a "+N" badge
 - Whole card is clickable and opens the post (new tab by default)
 - Posts refresh automatically in the background (default every 60 minutes), so pages never wait for Facebook
+- Hides shared posts whose original is no longer available
+- Clears common page-cache plugins when settings are saved or new posts arrive
 - Falls back to Facebook's own embed widget if the connection isn't set up or Facebook is unreachable
 - One-click connection helper that creates a non-expiring Page access token (App Secret is never stored)
 - Lithuanian defaults for button texts when the site language is Lithuanian
@@ -18,6 +20,8 @@ A WordPress plugin that automatically shows the latest posts from a Facebook Pag
 1. Download [`gd-fb-feed.zip`](https://github.com/devmant/display-fb-posts-in-wp/raw/main/gd-fb-feed.zip) from this repository.
 2. In WordPress: **Plugins → Add New → Upload Plugin** → choose the zip → **Install** → **Activate**.
 3. Go to **Settings → Facebook Feed** and follow **Connect your Facebook Page** (one-time, about 5 minutes).
+   - **Recommended:** a System User token from Meta Business Settings (no login popup, never expires). The app, the system user and the Page must be in the same business portfolio; the app needs the *Manage everything on your Page* use case, and the token needs `pages_show_list` and `pages_read_engagement`. Leave App ID / App Secret empty.
+   - Or: a Graph API Explorer user token together with your App ID and App Secret.
 4. Add the shortcode `[fb_posts]` to any page (in the block editor, use a **Shortcode** block).
 
 ## Shortcode options
