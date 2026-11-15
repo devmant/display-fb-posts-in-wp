@@ -1,7 +1,7 @@
 === FB Posts Feed ===
 Requires at least: 5.8
 Requires PHP: 7.4
-Stable tag: 1.0.0
+Stable tag: 1.2.1
 License: GPLv2 or later
 
 Shows the latest posts from your Facebook Page as a responsive gallery. Each card opens the post on Facebook.
@@ -10,6 +10,8 @@ Shows the latest posts from your Facebook Page as a responsive gallery. Each car
 
 1. WordPress admin → Plugins → Add New → Upload Plugin → choose gd-fb-feed.zip → Install → Activate.
 2. Settings → Facebook Feed → follow "Connect your Facebook Page" (one-time, ~5 minutes).
+   Way A (recommended): System User token from Meta Business Settings — no login popup, never expires.
+   Way B: Graph API Explorer user token + App ID + App Secret.
 3. Add the shortcode [fb_posts] to any page (Gutenberg: add a "Shortcode" block).
 
 Before you connect, the plugin shows Facebook's own embed widget, so the page is never empty.
@@ -44,3 +46,28 @@ Override CSS variables in your theme (Appearance → Customize → Additional CS
   --gdff-gap: 20px;
   --gdff-image-ratio: 1 / 1;   /* square images */
 }
+
+== Changelog ==
+
+= 1.2.1 =
+* Fix: post count setting now applies straight away (loads more posts from Facebook when needed).
+* Follows Facebook paging when it returns fewer posts than requested.
+* Clears common page-cache plugins after saving settings, refreshing, or when new posts arrive.
+* Fix: connecting no longer resets the display checkboxes.
+
+= 1.2.0 =
+* Hide shared posts whose original is no longer available ("This content isn't available right now").
+* Posts reload automatically after a plugin update.
+
+= 1.1.2 =
+* Falls back to requesting the Page by ID when the token lists no Pages.
+
+= 1.1.1 =
+* Clearer message when a token has no Page assigned.
+
+= 1.1.0 =
+* Connect with a System User token from Meta Business Settings (no Facebook login popup needed).
+* Pasting a Page access token directly also works.
+
+= 1.0.0 =
+* First release.

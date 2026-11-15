@@ -53,8 +53,17 @@ class GDFF_Feed {
 				false
 			);
 		} else {
+			$old     = get_option( GDFF_CACHE_OPTION );
+			$old_ids = is_array( $old ) && isset( $old['posts'] ) ? wp_list_pluck( $old['posts'], 'id' ) : array();
+			$new_ids = wp_list_pluck( $data['posts'], 'id' );
+
 			update_option( GDFF_CACHE_OPTION, $data, false );
 			delete_option( GDFF_ERROR_OPTION );
+
+			// New or removed posts: clear page caches so visitors see them.
+			if ( $old_ids && $old_ids !== $new_ids ) {
+				GDFF_Admin::purge_page_caches();
+			}
 		}
 
 		delete_transient( self::LOCK );
@@ -144,7 +153,18 @@ class GDFF_Feed {
 		$images  = self::bool( $a['images'] );
 		$header  = self::bool( $a['header'] );
 		$follow  = self::bool( $a['follow'] );
-		$posts   = array_slice( (array) $data['posts'], 0, $limit );
+		$posts   = array_values(
+			array_filter(
+				(array) $data['posts'],
+				function ( $p ) {
+					$has_text  = '' !== trim( (string) $p['message'] ) && ! GDFF_API::is_unavailable_text( $p['message'] );
+					$has_link  = '' !== (string) $p['link_title'] && ! GDFF_API::is_unavailable_text( $p['link_title'] );
+					$has_image = '' !== (string) $p['image'];
+					return $has_text || $has_link || $has_image;
+				}
+			)
+		);
+		$posts   = array_slice( $posts, 0, $limit );
 		$page    = $data['page'];
 		$accent  = sanitize_hex_color( $s['accent_color'] );
 		$accent  = $accent ? $accent : '#1877f2';
@@ -185,6 +205,13 @@ class GDFF_Feed {
 		$has_image = $images && '' !== $post['image'];
 
 		// A shared link without its own text: use the link title as the text.
+		if ( GDFF_API::is_unavailable_text( $post['link_title'] ) ) {
+			$post['link_title'] = '';
+			$post['link_url']   = '';
+		}
+		if ( GDFF_API::is_unavailable_text( $post['message'] ) ) {
+			$text_html = '';
+		}
 		if ( '' === $text_html && '' !== $post['link_title'] ) {
 			$text_html = esc_html( $post['link_title'] );
 		}

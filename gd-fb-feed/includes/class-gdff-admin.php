@@ -18,6 +18,55 @@ class GDFF_Admin {
 		add_action( 'admin_post_gdff_refresh', array( __CLASS__, 'handle_refresh' ) );
 		add_action( 'admin_post_gdff_disconnect', array( __CLASS__, 'handle_disconnect' ) );
 		add_filter( 'plugin_action_links_' . plugin_basename( GDFF_FILE ), array( __CLASS__, 'action_links' ) );
+		add_action( 'update_option_' . GDFF_OPTION, array( __CLASS__, 'after_save' ), 10, 2 );
+	}
+
+	/**
+	 * After settings change: load more posts if needed and clear page caches,
+	 * so the change is visible on the site straight away.
+	 */
+	public static function after_save( $old, $new ) {
+		$old_limit = is_array( $old ) && isset( $old['limit'] ) ? (int) $old['limit'] : 0;
+		$new_limit = is_array( $new ) && isset( $new['limit'] ) ? (int) $new['limit'] : 0;
+		$cache     = get_option( GDFF_CACHE_OPTION );
+		$cached    = is_array( $cache ) && isset( $cache['posts'] ) ? count( $cache['posts'] ) : 0;
+
+		if ( GDFF_Settings::is_connected() && $new_limit !== $old_limit && $cached < $new_limit ) {
+			delete_transient( GDFF_Feed::LOCK );
+			GDFF_Feed::refresh();
+		}
+
+		self::purge_page_caches();
+	}
+
+	/**
+	 * Clear the most common WordPress page-cache plugins and hosts.
+	 */
+	public static function purge_page_caches() {
+		do_action( 'litespeed_purge_all' );                       // LiteSpeed Cache.
+		if ( function_exists( 'rocket_clean_domain' ) ) {         // WP Rocket.
+			rocket_clean_domain();
+		}
+		if ( function_exists( 'w3tc_flush_all' ) ) {              // W3 Total Cache.
+			w3tc_flush_all();
+		}
+		if ( function_exists( 'wp_cache_clear_cache' ) ) {        // WP Super Cache.
+			wp_cache_clear_cache();
+		}
+		if ( function_exists( 'sg_cachepress_purge_cache' ) ) {   // SiteGround.
+			sg_cachepress_purge_cache();
+		}
+		if ( class_exists( 'WpFastestCache' ) ) {                 // WP Fastest Cache.
+			do_action( 'wpfc_clear_all_cache' );
+		}
+		if ( class_exists( 'autoptimizeCache' ) && method_exists( 'autoptimizeCache', 'clearall' ) ) {
+			autoptimizeCache::clearall();
+		}
+		do_action( 'breeze_clear_all_cache' );                    // Breeze (Cloudways).
+		do_action( 'cache_enabler_clear_complete_cache' );        // Cache Enabler.
+		if ( function_exists( 'wp_cache_flush' ) ) {
+			wp_cache_flush();
+		}
 	}
 
 	public static function action_links( $links ) {
@@ -64,13 +113,18 @@ class GDFF_Admin {
 		$out['read_more_text'] = isset( $in['read_more_text'] ) ? sanitize_text_field( $in['read_more_text'] ) : $old['read_more_text'];
 		$out['follow_text']    = isset( $in['follow_text'] ) ? sanitize_text_field( $in['follow_text'] ) : $old['follow_text'];
 
+		// Unticked checkboxes are missing from a form post; programmatic updates keep current values.
+		$from_form = ! empty( $in['_form'] );
 		foreach ( array( 'show_images', 'show_header', 'show_follow', 'new_tab' ) as $k ) {
-			$out[ $k ] = empty( $in[ $k ] ) ? 0 : 1;
+			if ( $from_form ) {
+				$out[ $k ] = empty( $in[ $k ] ) ? 0 : 1;
+			} elseif ( isset( $in[ $k ] ) ) {
+				$out[ $k ] = empty( $in[ $k ] ) ? 0 : 1;
+			}
 		}
 
 		// Token: on the settings form a blank field keeps the saved one.
 		// Programmatic updates (connect / disconnect) set it directly.
-		$from_form = ! empty( $in['_form'] );
 		if ( isset( $in['access_token'] ) && ( '' !== trim( $in['access_token'] ) || ! $from_form ) ) {
 			$out['access_token'] = sanitize_text_field( trim( $in['access_token'] ) );
 		}
@@ -109,8 +163,13 @@ class GDFF_Admin {
 		$app_secret = self::post_field( 'app_secret' );
 		$user_token = self::post_field( 'user_token' );
 
-		if ( '' === $app_id || '' === $app_secret || '' === $user_token ) {
-			self::notice( 'error', 'Please fill in App ID, App Secret and the User Access Token.' );
+		if ( '' === $user_token ) {
+			self::notice( 'error', 'Please paste an access token.' );
+			wp_safe_redirect( self::url() );
+			exit;
+		}
+		if ( ( '' === $app_id ) !== ( '' === $app_secret ) ) {
+			self::notice( 'error', 'Fill in both App ID and App Secret, or leave both empty when using a System User token.' );
 			wp_safe_redirect( self::url() );
 			exit;
 		}
@@ -188,6 +247,7 @@ class GDFF_Admin {
 		self::guard( 'gdff_refresh' );
 		delete_transient( GDFF_Feed::LOCK );
 		$data = GDFF_Feed::refresh();
+		self::purge_page_caches();
 		if ( is_wp_error( $data ) ) {
 			self::notice( 'error', $data->get_error_message() );
 		} else {
@@ -300,23 +360,36 @@ class GDFF_Admin {
 			<!-- Connect -->
 			<div class="card">
 				<h2>Connect your Facebook Page</h2>
+				<p>Choose <strong>one</strong> of the two ways below. Way A is recommended: it does not use the Facebook login popup and the token never expires.</p>
+
 				<details <?php echo GDFF_Settings::is_connected() ? '' : 'open'; ?>>
-					<summary>Step-by-step (about 5 minutes, done once)</summary>
+					<summary>Way A — System User token from Meta Business Settings (recommended)</summary>
 					<ol>
-						<li>Go to <a href="https://developers.facebook.com/apps/" target="_blank" rel="noopener">developers.facebook.com/apps</a> (log in with the account that is admin of your Page) → <strong>Create app</strong>. Pick the use case for managing a Facebook <strong>Page</strong>. The app can stay in development mode — no review is needed because you only read your own Page.</li>
-						<li>In the app open <strong>App settings → Basic</strong> and copy the <strong>App ID</strong> and <strong>App Secret</strong>.</li>
-						<li>Open the <a href="https://developers.facebook.com/tools/explorer/" target="_blank" rel="noopener">Graph API Explorer</a>, select your app, choose <strong>User Token</strong>, add the permissions <code>pages_show_list</code> and <code>pages_read_engagement</code>, then click <strong>Generate Access Token</strong> and allow access to your Page.</li>
-						<li>Copy the token and paste all three values below, then click <strong>Connect</strong>. The plugin turns it into a permanent Page token. The App Secret is used once and is <em>not</em> saved.</li>
+						<li>Create an app at <a href="https://developers.facebook.com/apps/" target="_blank" rel="noopener">developers.facebook.com/apps</a> (type <strong>Business</strong>, or the use case for managing a Facebook Page) and connect it to your business portfolio.</li>
+						<li>Open <a href="https://business.facebook.com/settings/system-users" target="_blank" rel="noopener">Business Settings → Users → System users</a> → <strong>Add</strong>. Any name, role <strong>Employee</strong>.</li>
+						<li>Select the system user → <strong>Assign assets</strong> → <strong>Pages</strong> → tick your Page → allow at least <em>Content</em> access → Save. Your Page must be in this business portfolio.</li>
+						<li>Click <strong>Generate new token</strong> → choose your app → expiration <strong>Never</strong> → tick <code>pages_show_list</code> and <code>pages_read_engagement</code> → Generate. Copy the token.</li>
+						<li>Paste it in <strong>Access Token</strong> below, leave App ID and App Secret <strong>empty</strong>, click <strong>Connect</strong>.</li>
 					</ol>
+				</details>
+
+				<details>
+					<summary>Way B — Graph API Explorer (uses the Facebook login popup)</summary>
+					<ol>
+						<li>Create an app at <a href="https://developers.facebook.com/apps/" target="_blank" rel="noopener">developers.facebook.com/apps</a>. In <strong>App settings → Basic</strong> copy the <strong>App ID</strong> and <strong>App Secret</strong>.</li>
+						<li>Open the <a href="https://developers.facebook.com/tools/explorer/" target="_blank" rel="noopener">Graph API Explorer</a>, select your app, choose <strong>User Token</strong>, add <code>pages_show_list</code> and <code>pages_read_engagement</code>, click <strong>Generate Access Token</strong> and allow your Page.</li>
+						<li>Paste App ID, App Secret and the token below and click <strong>Connect</strong>. The plugin turns it into a permanent Page token. The App Secret is not saved.</li>
+					</ol>
+					<p class="description">If the popup says “Feature Unavailable … updating additional details for this app”, Meta is holding your app: open the app dashboard and complete any red <em>Required actions</em>, fill in Privacy Policy URL, category and icon in App settings → Basic, or use Way A.</p>
 				</details>
 
 				<form method="post" action="<?php echo esc_url( admin_url( 'admin-post.php' ) ); ?>">
 					<input type="hidden" name="action" value="gdff_connect">
 					<?php wp_nonce_field( 'gdff_connect' ); ?>
 					<table class="form-table" role="presentation">
-						<tr><th><label for="gdff_app_id">App ID</label></th><td><input id="gdff_app_id" name="app_id" type="text" class="regular-text" autocomplete="off"></td></tr>
-						<tr><th><label for="gdff_app_secret">App Secret</label></th><td><input id="gdff_app_secret" name="app_secret" type="password" class="regular-text" autocomplete="off"></td></tr>
-						<tr><th><label for="gdff_user_token">User Access Token</label></th><td><textarea id="gdff_user_token" name="user_token" rows="3" class="large-text code" autocomplete="off"></textarea></td></tr>
+						<tr><th><label for="gdff_user_token">Access Token</label></th><td><textarea id="gdff_user_token" name="user_token" rows="3" class="large-text code" autocomplete="off"></textarea><p class="description">System User token (Way A) or User token (Way B).</p></td></tr>
+						<tr><th><label for="gdff_app_id">App ID</label></th><td><input id="gdff_app_id" name="app_id" type="text" class="regular-text" autocomplete="off"> <span class="description">Way B only</span></td></tr>
+						<tr><th><label for="gdff_app_secret">App Secret</label></th><td><input id="gdff_app_secret" name="app_secret" type="password" class="regular-text" autocomplete="off"> <span class="description">Way B only</span></td></tr>
 					</table>
 					<?php submit_button( GDFF_Settings::is_connected() ? 'Reconnect' : 'Connect', 'primary', 'submit', false ); ?>
 				</form>

@@ -80,23 +80,39 @@ class GDFF_API {
 			return $page;
 		}
 
-		$res = self::request(
-			$s['page_id'] . '/posts',
-			array(
+		// Facebook may return fewer posts per page than asked for, so follow
+		// the "after" cursor until we have enough (max 5 requests).
+		$wanted = $limit;
+		$posts  = array();
+		$after  = '';
+		for ( $i = 0; $i < 5 && count( $posts ) < $wanted; $i++ ) {
+			$args = array(
 				'fields'       => 'id,message,created_time,permalink_url,full_picture,status_type,attachments{media_type,type,url,title,subattachments.limit(50){media_type}}',
 				'limit'        => $limit,
 				'access_token' => $token,
-			)
-		);
-		if ( is_wp_error( $res ) ) {
-			return $res;
-		}
+			);
+			if ( '' !== $after ) {
+				$args['after'] = $after;
+			}
 
-		$posts = array();
-		foreach ( (array) ( isset( $res['data'] ) ? $res['data'] : array() ) as $raw ) {
-			$post = self::normalize_post( $raw );
-			if ( $post ) {
-				$posts[] = $post;
+			$res = self::request( $s['page_id'] . '/posts', $args );
+			if ( is_wp_error( $res ) ) {
+				if ( $i > 0 ) {
+					break; // Keep what we already have.
+				}
+				return $res;
+			}
+
+			foreach ( (array) ( isset( $res['data'] ) ? $res['data'] : array() ) as $raw ) {
+				$post = self::normalize_post( $raw );
+				if ( $post ) {
+					$posts[] = $post;
+				}
+			}
+
+			$after = isset( $res['paging']['cursors']['after'] ) ? (string) $res['paging']['cursors']['after'] : '';
+			if ( '' === $after || empty( $res['paging']['next'] ) || empty( $res['data'] ) ) {
+				break;
 			}
 		}
 
@@ -112,6 +128,29 @@ class GDFF_API {
 		);
 	}
 
+	/**
+	 * Facebook's placeholder for shared content that is no longer visible.
+	 */
+	public static function is_unavailable_text( $text ) {
+		$text = mb_strtolower( trim( (string) $text ) );
+		if ( '' === $text ) {
+			return false;
+		}
+		$needles = array(
+			'this content isn\'t available',
+			'this content isn’t available',
+			'this content is not available',
+			'šis turinys šiuo metu nepasiekiamas',
+			'šis turinys nepasiekiamas',
+		);
+		foreach ( $needles as $n ) {
+			if ( 0 === strpos( $text, $n ) ) {
+				return true;
+			}
+		}
+		return false;
+	}
+
 	private static function normalize_post( array $raw ) {
 		$message = isset( $raw['message'] ) ? (string) $raw['message'] : '';
 		$image   = isset( $raw['full_picture'] ) ? (string) $raw['full_picture'] : '';
@@ -121,7 +160,17 @@ class GDFF_API {
 		$att_type   = isset( $att['type'] ) ? strtolower( (string) $att['type'] ) : '';
 		$status     = isset( $raw['status_type'] ) ? (string) $raw['status_type'] : '';
 
-		// Skip posts with nothing to show (e.g. some page-update events).
+		// Shared content that was deleted or made private: Facebook returns a placeholder
+		// ("This content isn't available right now"). Ignore the attachment.
+		$att_title = isset( $att['title'] ) ? (string) $att['title'] : '';
+		if ( in_array( $att_type, array( 'native_templates', 'unavailable' ), true ) || self::is_unavailable_text( $att_title ) || self::is_unavailable_text( $message ) ) {
+			$att = array();
+			if ( self::is_unavailable_text( $message ) ) {
+				$message = '';
+			}
+		}
+
+		// Skip posts with nothing to show (e.g. some page-update events, unavailable shares).
 		if ( '' === trim( $message ) && '' === $image && empty( $att ) ) {
 			return null;
 		}
@@ -162,20 +211,27 @@ class GDFF_API {
 	 * @return array|WP_Error List of pages: [ ['id','name','link','access_token'], ... ]
 	 */
 	public static function exchange_for_page_tokens( $app_id, $app_secret, $user_token ) {
-		$long = self::request(
-			'oauth/access_token',
-			array(
-				'grant_type'        => 'fb_exchange_token',
-				'client_id'         => $app_id,
-				'client_secret'     => $app_secret,
-				'fb_exchange_token' => $user_token,
-			)
-		);
-		if ( is_wp_error( $long ) ) {
-			return $long;
-		}
-		if ( empty( $long['access_token'] ) ) {
-			return new WP_Error( 'gdff_no_token', 'Facebook did not return a long-lived token.' );
+		$token = $user_token;
+
+		// With App ID + Secret: turn a short-lived user token into a long-lived one.
+		// Without them (e.g. a non-expiring System User token from Business Settings): use the token as-is.
+		if ( '' !== (string) $app_id && '' !== (string) $app_secret ) {
+			$long = self::request(
+				'oauth/access_token',
+				array(
+					'grant_type'        => 'fb_exchange_token',
+					'client_id'         => $app_id,
+					'client_secret'     => $app_secret,
+					'fb_exchange_token' => $user_token,
+				)
+			);
+			if ( is_wp_error( $long ) ) {
+				return $long;
+			}
+			if ( empty( $long['access_token'] ) ) {
+				return new WP_Error( 'gdff_no_token', 'Facebook did not return a long-lived token.' );
+			}
+			$token = $long['access_token'];
 		}
 
 		$accounts = self::request(
@@ -183,10 +239,38 @@ class GDFF_API {
 			array(
 				'fields'       => 'id,name,link,access_token',
 				'limit'        => 100,
-				'access_token' => $long['access_token'],
+				'access_token' => $token,
 			)
 		);
+
+		// The pasted token may already be a Page token: then "me" is the Page itself.
 		if ( is_wp_error( $accounts ) ) {
+			$me = self::request(
+				'me',
+				array(
+					'fields'       => 'id,name,link',
+					'access_token' => $token,
+				)
+			);
+			if ( ! is_wp_error( $me ) && ! empty( $me['id'] ) ) {
+				$check = self::request(
+					$me['id'] . '/posts',
+					array(
+						'limit'        => 1,
+						'access_token' => $token,
+					)
+				);
+				if ( ! is_wp_error( $check ) ) {
+					return array(
+						array(
+							'id'           => (string) $me['id'],
+							'name'         => isset( $me['name'] ) ? (string) $me['name'] : (string) $me['id'],
+							'link'         => isset( $me['link'] ) ? (string) $me['link'] : '',
+							'access_token' => $token,
+						),
+					);
+				}
+			}
 			return $accounts;
 		}
 
@@ -203,10 +287,50 @@ class GDFF_API {
 			);
 		}
 
+		// me/accounts can be empty for System Users even when the Page is assigned:
+		// ask for the configured Page directly.
+		$page_id = (string) GDFF_Settings::get( 'page_id' );
+		if ( empty( $pages ) && '' !== $page_id ) {
+			$direct = self::request(
+				$page_id,
+				array(
+					'fields'       => 'id,name,link,access_token',
+					'access_token' => $token,
+				)
+			);
+			if ( ! is_wp_error( $direct ) && ! empty( $direct['id'] ) ) {
+				$page_token = ! empty( $direct['access_token'] ) ? (string) $direct['access_token'] : $token;
+				$check      = self::request(
+					$direct['id'] . '/posts',
+					array(
+						'limit'        => 1,
+						'access_token' => $page_token,
+					)
+				);
+				if ( ! is_wp_error( $check ) ) {
+					$pages[] = array(
+						'id'           => (string) $direct['id'],
+						'name'         => isset( $direct['name'] ) ? (string) $direct['name'] : $page_id,
+						'link'         => isset( $direct['link'] ) ? (string) $direct['link'] : '',
+						'access_token' => $page_token,
+					);
+				}
+			}
+		}
+
 		if ( empty( $pages ) ) {
+			$who = self::request(
+				'me',
+				array(
+					'fields'       => 'id,name',
+					'access_token' => $token,
+				)
+			);
+			$who = ( ! is_wp_error( $who ) && ! empty( $who['name'] ) ) ? ' The token belongs to "' . $who['name'] . '" (ID ' . $who['id'] . '), and no Page is assigned to it.' : '';
+
 			return new WP_Error(
 				'gdff_no_pages',
-				'No Facebook Pages were found for this account. Make sure you are an admin of the Page and that you granted the pages_show_list and pages_read_engagement permissions when generating the token.'
+				'No Facebook Pages were found for this token.' . $who . ' For a System User token: in Business Settings → Users → System users → select the user → Assign assets → Pages → tick your Page, then generate a new token and leave App ID / App Secret empty. For a Graph API Explorer token: make sure your Page was ticked in the Facebook popup.'
 			);
 		}
 
